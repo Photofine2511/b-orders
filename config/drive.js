@@ -192,18 +192,34 @@ const downloadFromDrive = async (fileId, res) => {
       fields: 'name,mimeType'
     });
     
-    // Set response headers
-    res.setHeader('Content-Disposition', `attachment; filename="${fileMetadata.data.name}"`);
-    res.setHeader('Content-Type', fileMetadata.data.mimeType || 'application/octet-stream');
-    
-    // Get the file content
-    const response = await drive.files.get({
-      fileId: fileId,
-      alt: 'media'
-    }, { responseType: 'stream' });
-    
-    // Pipe the file stream to the response
-    response.data.pipe(res);
+    // If res is provided, set headers and pipe response
+    if (res) {
+      // Set response headers
+      res.setHeader('Content-Disposition', `attachment; filename="${fileMetadata.data.name}"`);
+      res.setHeader('Content-Type', fileMetadata.data.mimeType || 'application/octet-stream');
+      
+      // Get the file content
+      const response = await drive.files.get({
+        fileId: fileId,
+        alt: 'media'
+      }, { responseType: 'stream' });
+      
+      // Pipe the file stream to the response
+      response.data.pipe(res);
+      return;
+    } else {
+      // For cases where res is not provided, return the file data and metadata
+      const response = await drive.files.get({
+        fileId: fileId,
+        alt: 'media'
+      }, { responseType: 'stream' });
+      
+      return {
+        data: response.data,
+        name: fileMetadata.data.name,
+        mimeType: fileMetadata.data.mimeType
+      };
+    }
   } catch (error) {
     console.error('Error downloading from Google Drive:', error);
     throw error;
