@@ -320,6 +320,68 @@ const deleteOrder = async (req, res) => {
   }
 };
 
+// @desc    Upload file directly to Google Drive only (no order creation)
+// @route   POST /api/orders/upload-to-drive
+// @access  Private
+const uploadToDriveOnly = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Please upload a file' });
+    }
+
+    // Get the file path and information
+    const filePath = req.file.path;
+    
+    // Check if Google Drive client is available
+    if (!getDriveClient()) {
+      return res.status(500).json({ 
+        message: 'Google Drive storage is not available. Please try the standard upload method.' 
+      });
+    }
+    
+    try {
+      // Upload file to Google Drive with increased timeout
+      const driveFile = await uploadToDrive(
+        filePath,
+        req.file.originalname,
+        req.file.mimetype
+      );
+
+      if (driveFile) {
+        // File was successfully uploaded to Google Drive
+        const fileUrl = driveFile.webContentLink || driveFile.webViewLink;
+        
+        // Delete the local file since we now have it in Google Drive
+        await deleteLocalFile(filePath);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'File uploaded to Google Drive successfully',
+          fileInfo: {
+            id: driveFile.id,
+            name: driveFile.name,
+            size: driveFile.size,
+            url: fileUrl
+          }
+        });
+      } else {
+        return res.status(500).json({ 
+          message: 'Failed to upload to Google Drive. Please try again.' 
+        });
+      }
+    } catch (driveError) {
+      console.error('Error uploading to Google Drive:', driveError);
+      return res.status(500).json({ 
+        message: 'Error uploading to Google Drive',
+        error: driveError.message
+      });
+    }
+  } catch (error) {
+    console.error('Server error during Google Drive upload:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
@@ -329,5 +391,6 @@ module.exports = {
   downloadOrderFile,
   downloadDriveFile,
   addOrderNotes,
-  deleteOrder
+  deleteOrder,
+  uploadToDriveOnly
 }; 

@@ -9,7 +9,8 @@ const {
   downloadOrderFile,
   downloadDriveFile,
   addOrderNotes,
-  deleteOrder
+  deleteOrder,
+  uploadToDriveOnly
 } = require('../controllers/orderController');
 const { protect, admin } = require('../middleware/authMiddleware');
 const { upload } = require('../config/drive');
@@ -40,5 +41,8 @@ router.put('/:id/notes', protect, admin, addOrderNotes);
 
 // @route   DELETE /api/orders/:id
 router.delete('/:id', protect, admin, deleteOrder);
+
+// Add direct Google Drive upload route for large files
+router.post('/upload-to-drive', protect, upload.single('albumFile'), uploadToDriveOnly);
 
 module.exports = router; 
