@@ -5,7 +5,8 @@ const {
   uploadToDrive, 
   downloadFromDrive, 
   deleteFromDrive,
-  getDriveClient
+  getDriveClient,
+  getFileFromDrive
 } = require('../config/drive');
 const path = require('path');
 const fs = require('fs');
@@ -24,52 +25,90 @@ const createOrder = async (req, res) => {
       emboss,
       miniBook,
       coverType,
+      driveFileId
     } = req.body;
 
-    if (!req.file) {
-      return res.status(400).json({ message: 'Please upload a file' });
-    }
-
-    // Get the file path and information
-    const filePath = req.file.path;
-    const relativePath = path.basename(filePath);
-    
-    // Determine storage provider
-    let storageProvider = 'local';
     let fileUrl = null;
-    let driveFileId = null;
+    let serverFilename = null;
+    let originalFilename = null;
+    let fileSize = 0;
+    let storageProvider = 'local';
+    let finalDriveFileId = null;
     let driveFileLink = null;
 
-    // Try to upload to Google Drive if available
-    try {
-      // Check if Google Drive client is available
-      if (getDriveClient()) {
-        // Upload file to Google Drive
-        const driveFile = await uploadToDrive(
-          filePath,
-          req.file.originalname,
-          req.file.mimetype
-        );
-
+    // Case 1: Using an existing Google Drive file ID
+    if (driveFileId) {
+      try {
+        // Verify that the file exists in Google Drive and get its details
+        const driveFile = await getFileFromDrive(driveFileId);
+        
+        // If we have the drive file, we can use it directly
         if (driveFile) {
-          // File was successfully uploaded to Google Drive
           storageProvider = 'google_drive';
-          driveFileId = driveFile.id;
+          finalDriveFileId = driveFile.id;
           driveFileLink = driveFile.webContentLink || driveFile.webViewLink;
-          fileUrl = getFileDownloadUrl(req, null, driveFileId);
+          fileUrl = getFileDownloadUrl(req, null, driveFile.id);
           
-          // Delete the local file since we now have it in Google Drive
-          await deleteLocalFile(filePath);
-          console.log(`Local file deleted after Google Drive upload: ${filePath}`);
+          // Get file details from the form data or from Drive
+          originalFilename = req.body.fileName_info || driveFile.name;
+          fileSize = parseInt(req.body.fileSize_info) || driveFile.size || 0;
+          
+          console.log(`Using existing Google Drive file: ${finalDriveFileId}`);
+        } else {
+          throw new Error('Drive file not found');
         }
+      } catch (driveError) {
+        console.error('Error verifying Google Drive file:', driveError);
+        return res.status(400).json({ 
+          message: 'Error with the provided Google Drive file ID. Please try uploading again.'
+        });
       }
-    } catch (driveError) {
-      console.error('Error uploading to Google Drive, falling back to local storage:', driveError);
     }
+    // Case 2: Upload a new file
+    else if (req.file) {
+      // Get the file path and information
+      const filePath = req.file.path;
+      const relativePath = path.basename(filePath);
+      serverFilename = relativePath;
+      originalFilename = req.file.originalname;
+      fileSize = req.file.size;
+      
+      // Always try to upload to Google Drive
+      try {
+        // Check if Google Drive client is available
+        if (getDriveClient()) {
+          // Upload file to Google Drive
+          const driveFile = await uploadToDrive(
+            filePath,
+            req.file.originalname,
+            req.file.mimetype
+          );
 
-    // If Google Drive upload failed or wasn't attempted, use local storage
-    if (storageProvider === 'local') {
-      fileUrl = getFileDownloadUrl(req, relativePath);
+          if (driveFile) {
+            // File was successfully uploaded to Google Drive
+            storageProvider = 'google_drive';
+            finalDriveFileId = driveFile.id;
+            driveFileLink = driveFile.webContentLink || driveFile.webViewLink;
+            fileUrl = getFileDownloadUrl(req, null, driveFile.id);
+            
+            // Delete the local file since we now have it in Google Drive
+            await deleteLocalFile(filePath);
+            console.log(`Local file deleted after Google Drive upload: ${filePath}`);
+          } else {
+            throw new Error('Failed to upload to Google Drive');
+          }
+        } else {
+          throw new Error('Google Drive client not available');
+        }
+      } catch (driveError) {
+        console.error('Error uploading to Google Drive:', driveError);
+        return res.status(500).json({ 
+          message: 'Error uploading to Google Drive. Please try again.', 
+          error: driveError.message 
+        });
+      }
+    } else {
+      return res.status(400).json({ message: 'Please upload a file, folder, or provide a valid Drive file ID' });
     }
 
     // Create order with file information
@@ -77,9 +116,9 @@ const createOrder = async (req, res) => {
       user: req.user._id,
       albumName,
       fileUrl,
-      originalFilename: req.file.originalname,
-      serverFilename: relativePath,
-      fileSize: req.file.size,
+      originalFilename,
+      serverFilename,
+      fileSize,
       pageType,
       lamination,
       transparent: transparent === 'true',
@@ -87,7 +126,7 @@ const createOrder = async (req, res) => {
       miniBook: miniBook === 'true',
       coverType,
       storageProvider,
-      driveFileId,
+      driveFileId: finalDriveFileId,
       driveFileLink
     });
 

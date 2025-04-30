@@ -24,8 +24,13 @@ const storage = multer.diskStorage({
 // Set up multer upload middleware
 const upload = multer({ 
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
+  limits: { fileSize: 1024 * 1024 * 1024 }, // 1GB limit (increased from 500MB)
   fileFilter: function (req, file, cb) {
+    // If it's a directory (sent as multiple files), accept it
+    if (req.body && req.body.isDirectory === 'true') {
+      return cb(null, true);
+    }
+    
     const filetypes = /zip|rar|7z|pdf|jpg|jpeg|png|webp|gif|bmp|tiff|tif/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
