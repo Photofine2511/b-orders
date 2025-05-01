@@ -43,6 +43,6 @@ router.put('/:id/notes', protect, admin, addOrderNotes);
 router.delete('/:id', protect, admin, deleteOrder);
 
 // Add direct Google Drive upload route for large files
-router.post('/upload-to-drive', protect, upload.array('albumFiles', 100), uploadToDriveOnly);
+router.post('/upload-to-drive', protect, upload.any(), uploadToDriveOnly);
 
 module.exports = router; 

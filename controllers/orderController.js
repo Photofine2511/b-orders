@@ -229,6 +229,24 @@ const downloadOrderFile = async (req, res) => {
     // Handle Google Drive files
     if (order.storageProvider === 'google_drive' && order.driveFileId) {
       try {
+        // Get file metadata to determine if it's a folder
+        const drive = getDriveClient();
+        if (!drive) {
+          throw new Error('Google Drive client not available');
+        }
+        
+        const fileMetadata = await drive.files.get({
+          fileId: order.driveFileId,
+          fields: 'mimeType,webViewLink'
+        });
+        
+        // Check if this is a folder based on mime type
+        if (fileMetadata.data.mimeType === 'application/vnd.google-apps.folder') {
+          console.log(`Redirecting to Google Drive folder: ${order.albumName}`);
+          // For folders, redirect to Google Drive instead of trying to download
+          return res.redirect(fileMetadata.data.webViewLink);
+        }
+        
         const driveFile = await downloadFromDrive(order.driveFileId);
         
         if (driveFile && driveFile.data) {
@@ -277,6 +295,24 @@ const downloadDriveFile = async (req, res) => {
     
     if (!fileId) {
       return res.status(400).json({ message: 'File ID is required' });
+    }
+    
+    // Get file metadata to determine if it's a folder
+    const drive = getDriveClient();
+    if (!drive) {
+      throw new Error('Google Drive client not available');
+    }
+    
+    const fileMetadata = await drive.files.get({
+      fileId: fileId,
+      fields: 'mimeType,webViewLink,name'
+    });
+    
+    // Check if this is a folder based on mime type
+    if (fileMetadata.data.mimeType === 'application/vnd.google-apps.folder') {
+      console.log(`Redirecting to Google Drive folder: ${fileMetadata.data.name}`);
+      // For folders, redirect to Google Drive instead of trying to download
+      return res.redirect(fileMetadata.data.webViewLink);
     }
     
     const driveFile = await downloadFromDrive(fileId);
@@ -381,11 +417,24 @@ const uploadToDriveOnly = async (req, res) => {
       - Content Length: ${req.headers['content-length'] || 'Not specified'} bytes
     `);
     
-    // Check if we have files to upload (array or single file)
-    const isMultipleFiles = req.files && req.files.length > 0;
-    const isSingleFile = req.file;
+    // Log the file fields we received
+    if (req.files && req.files.length > 0) {
+      console.log(`Fields of first file: ${JSON.stringify({
+        fieldname: req.files[0].fieldname,
+        originalname: req.files[0].originalname,
+        mimetype: req.files[0].mimetype,
+        size: req.files[0].size
+      })}`);
+    }
     
-    if (!isMultipleFiles && !isSingleFile) {
+    // For debugging, display all field names from the request
+    console.log(`Request body fields: ${Object.keys(req.body).join(', ')}`);
+    
+    // Now handle both array files and single files together
+    const allFiles = req.files || (req.file ? [req.file] : []);
+    
+    // Early return if no files
+    if (allFiles.length === 0) {
       console.error('No files received in request');
       return res.status(400).json({ message: 'No files received. Please upload at least one file or folder.' });
     }
@@ -395,8 +444,8 @@ const uploadToDriveOnly = async (req, res) => {
     const folderName = req.body.folderName || 'Uploaded Folder';
     
     // If it's a folder upload with multiple files
-    if (isFolder && isMultipleFiles) {
-      console.log(`Processing folder upload: ${folderName} with ${req.files.length} files`);
+    if (isFolder && allFiles.length > 1) {
+      console.log(`Processing folder upload: ${folderName} with ${allFiles.length} files`);
       
       // First, create a folder in Google Drive
       const drive = getDriveClient();
@@ -431,9 +480,9 @@ const uploadToDriveOnly = async (req, res) => {
         const errorFiles = [];
         
         // Now upload each file to this folder
-        console.log(`Starting upload of ${req.files.length} files to folder ${folderId}`);
+        console.log(`Starting upload of ${allFiles.length} files to folder ${folderId}`);
         
-        for (const file of req.files) {
+        for (const file of allFiles) {
           try {
             // Extract relative path from file info
             let relativePath = '';
@@ -501,6 +550,7 @@ const uploadToDriveOnly = async (req, res) => {
             isFolder: true,
             fileCount: uploadedFiles.length,
             url: folderResponse.data.webViewLink,
+            mimeType: 'application/vnd.google-apps.folder', // Explicitly mark the mime type
             files: uploadedFiles,
             errors: errorFiles.length > 0 ? errorFiles : undefined
           }
@@ -515,17 +565,31 @@ const uploadToDriveOnly = async (req, res) => {
       }
     } 
     // If it's a single file upload
-    else if (isSingleFile) {
-      const filePath = req.file.path;
+    else if (allFiles.length === 1) {
+      const file = allFiles[0];
+      const filePath = file.path;
       
       try {
-        console.log(`Uploading single file to Google Drive: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`Uploading single file to Google Drive: ${file.originalname} (${file.size} bytes)`);
+        console.log(`File details: fieldname=${file.fieldname}, mimetype=${file.mimetype}`);
+        
+        // Check for supported file types
+        const fileName = file.originalname.toLowerCase();
+        const validExtensions = ['.zip', '.rar', '.7z', '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif'];
+        const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+        
+        if (!hasValidExtension) {
+          console.error(`Invalid file type detected: ${fileName}`);
+          return res.status(400).json({ 
+            message: `Invalid file type. Supported formats are: ZIP, RAR, 7Z, PDF, and image files.`
+          });
+        }
         
         // Upload file to Google Drive
         const driveFile = await uploadToDrive(
           filePath,
-          req.file.originalname,
-          req.file.mimetype
+          file.originalname,
+          file.mimetype
         );
 
         if (driveFile) {
