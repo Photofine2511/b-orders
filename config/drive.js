@@ -105,7 +105,7 @@ const getDriveClient = () => {
 };
 
 // Upload a file to Google Drive
-const uploadToDrive = async (filePath, fileName, mimeType) => {
+const uploadToDrive = async (filePath, fileName, mimeType, parentFolderId = null) => {
   try {
     const drive = getDriveClient();
     
@@ -115,13 +115,20 @@ const uploadToDrive = async (filePath, fileName, mimeType) => {
       return null;
     }
 
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found at path: ${filePath}`);
+      throw new Error(`File not found at path: ${filePath}`);
+    }
+
     // Create a readable stream from the file
     const fileStream = fs.createReadStream(filePath);
     
     // Set up the file metadata
     const fileMetadata = {
       name: fileName,
-      parents: [process.env.GOOGLE_DRIVE_FOLDER_ID] // Folder ID where files will be stored
+      // If parentFolderId is provided, use it; otherwise use the default folder
+      parents: [parentFolderId || process.env.GOOGLE_DRIVE_FOLDER_ID]
     };
     
     // Set up the media
@@ -129,6 +136,11 @@ const uploadToDrive = async (filePath, fileName, mimeType) => {
       mimeType: mimeType || 'application/octet-stream',
       body: fileStream
     };
+    
+    console.log(`Starting Google Drive upload for: ${fileName} (${filePath})`);
+    if (parentFolderId) {
+      console.log(`Uploading inside folder with ID: ${parentFolderId}`);
+    }
     
     // Upload the file to Google Drive
     const response = await drive.files.create({
@@ -157,6 +169,20 @@ const uploadToDrive = async (filePath, fileName, mimeType) => {
     return file.data;
   } catch (error) {
     console.error('Error uploading to Google Drive:', error);
+    
+    // Provide more detail about the error
+    if (error.code) {
+      console.error('Error code:', error.code);
+    }
+    
+    if (error.response) {
+      console.error('Error response:', error.response.data);
+    }
+    
+    if (error.message && error.message.includes('invalid_grant')) {
+      console.error('Google Drive authentication failed. Credentials may have expired.');
+    }
+    
     throw error;
   }
 };
