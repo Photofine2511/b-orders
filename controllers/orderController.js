@@ -411,8 +411,6 @@ const uploadToDriveOnly = async (req, res) => {
     // Add detailed request logging
     console.log(`Upload request received:
       - Files: ${req.files ? req.files.length : (req.file ? '1 (single)' : '0')} 
-      - isFolder: ${req.body.isFolder === 'true' ? 'Yes' : 'No'}
-      - folderName: ${req.body.folderName || 'N/A'}
       - Content Type: ${req.headers['content-type'] || 'Not specified'}
       - Content Length: ${req.headers['content-length'] || 'Not specified'} bytes
     `);
@@ -436,210 +434,95 @@ const uploadToDriveOnly = async (req, res) => {
     // Early return if no files
     if (allFiles.length === 0) {
       console.error('No files received in request');
-      return res.status(400).json({ message: 'No files received. Please upload at least one file or folder.' });
+      return res.status(400).json({ message: 'No files received. Please upload a file.' });
     }
     
-    // Is this a folder upload?
-    const isFolder = req.body.isFolder === 'true';
-    const folderName = req.body.folderName || 'Uploaded Folder';
+    // We only handle single file uploads now - use the first file if multiple were sent
+    const file = allFiles[0];
+    const filePath = file.path;
     
-    // If it's a folder upload with multiple files
-    if (isFolder && allFiles.length > 1) {
-      console.log(`Processing folder upload: ${folderName} with ${allFiles.length} files`);
+    try {
+      console.log(`Uploading file to Google Drive: ${file.originalname} (${file.size} bytes)`);
+      console.log(`File details: fieldname=${file.fieldname}, mimetype=${file.mimetype}`);
       
-      // First, create a folder in Google Drive
-      const drive = getDriveClient();
-      const folderMetadata = {
-        name: folderName,
-        parents: [process.env.GOOGLE_DRIVE_FOLDER_ID],
-        mimeType: 'application/vnd.google-apps.folder'
-      };
+      // Check for supported file types
+      const fileName = file.originalname.toLowerCase();
+      const validExtensions = ['.zip', '.rar', '.7z', '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif'];
+      const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
       
-      try {
-        // Create the folder
-        const folderResponse = await drive.files.create({
-          resource: folderMetadata,
-          fields: 'id,name,webViewLink'
+      if (!hasValidExtension) {
+        console.error(`Invalid file type detected: ${fileName}`);
+        return res.status(400).json({ 
+          message: `Invalid file type. Supported formats are: ZIP, RAR, 7Z, PDF, and image files.`
         });
+      }
+      
+      // Upload file to Google Drive
+      const driveFile = await uploadToDrive(
+        filePath,
+        file.originalname,
+        file.mimetype
+      );
+
+      if (driveFile) {
+        // File was successfully uploaded to Google Drive
+        const fileUrl = driveFile.webContentLink || driveFile.webViewLink;
         
-        const folderId = folderResponse.data.id;
-        console.log(`Folder created in Google Drive with ID: ${folderId}`);
+        // Delete the local file since we now have it in Google Drive
+        await deleteLocalFile(filePath);
+        console.log(`Uploaded to Google Drive successfully: ${driveFile.id}`);
         
-        // Make folder publicly accessible
-        await drive.permissions.create({
-          fileId: folderId,
-          requestBody: {
-            role: 'reader',
-            type: 'anyone'
-          }
-        });
-        
-        // Keep track of uploaded files
-        const uploadedFiles = [];
-        const filePaths = [];
-        const errorFiles = [];
-        
-        // Now upload each file to this folder
-        console.log(`Starting upload of ${allFiles.length} files to folder ${folderId}`);
-        
-        for (const file of allFiles) {
-          try {
-            // Extract relative path from file info
-            let relativePath = '';
-            
-            if (file.originalname.includes('/')) {
-              // Extract path from originalname if available (preserves subdirectories)
-              const pathParts = file.originalname.split('/');
-              relativePath = pathParts.slice(0, -1).join('/');
-              console.log(`File ${file.originalname} has path ${relativePath}`);
-            } else if (file.webkitRelativePath) {
-              // Use webkitRelativePath if available
-              const pathParts = file.webkitRelativePath.split('/');
-              relativePath = pathParts.slice(0, -1).join('/');
-              console.log(`File ${file.originalname} has webkitRelativePath ${relativePath}`);
-            }
-            
-            console.log(`Uploading file: ${file.originalname} (${file.size} bytes) to Google Drive folder ${folderId}`);
-            filePaths.push(file.path);
-            
-            // Upload the file to the folder
-            const driveFile = await uploadToDrive(
-              file.path,
-              file.originalname,
-              file.mimetype,
-              folderId // Pass folder ID to upload inside this folder
-            );
-            
-            if (driveFile) {
-              console.log(`Successfully uploaded ${file.originalname} to Google Drive with ID ${driveFile.id}`);
-              uploadedFiles.push({
-                name: driveFile.name,
-                id: driveFile.id,
-                size: driveFile.size || file.size,
-                url: driveFile.webContentLink || driveFile.webViewLink
-              });
-            } else {
-              console.error(`File upload failed for ${file.originalname} - drive returned null`);
-              errorFiles.push(file.originalname);
-            }
-          } catch (fileError) {
-            console.error(`Error uploading file ${file.originalname}:`, fileError);
-            errorFiles.push(file.originalname);
-          }
-        }
-        
-        // Clean up local files after upload
-        console.log(`Upload complete. Cleaning up ${filePaths.length} temporary files.`);
-        for (const filePath of filePaths) {
-          try {
-            if (fs.existsSync(filePath)) {
-              await deleteLocalFile(filePath);
-            }
-          } catch (deleteError) {
-            console.error(`Error deleting local file ${filePath}:`, deleteError);
-          }
-        }
-        
-        // Return information about the folder and files
         return res.status(200).json({
           success: true,
-          message: `Folder with ${uploadedFiles.length} files uploaded to Google Drive successfully${errorFiles.length > 0 ? ` (${errorFiles.length} files failed)` : ''}`,
+          message: 'File uploaded to Google Drive successfully',
           fileInfo: {
-            id: folderId, // This is the folder ID
-            name: folderName,
-            isFolder: true,
-            fileCount: uploadedFiles.length,
-            url: folderResponse.data.webViewLink,
-            mimeType: 'application/vnd.google-apps.folder', // Explicitly mark the mime type
-            files: uploadedFiles,
-            errors: errorFiles.length > 0 ? errorFiles : undefined
+            id: driveFile.id,
+            name: driveFile.name,
+            size: driveFile.size,
+            url: fileUrl
           }
         });
-        
-      } catch (folderError) {
-        console.error('Error creating folder in Google Drive:', folderError);
-        return res.status(500).json({
-          message: 'Error creating folder in Google Drive',
-          error: folderError.message
-        });
-      }
-    } 
-    // If it's a single file upload
-    else if (allFiles.length === 1) {
-      const file = allFiles[0];
-      const filePath = file.path;
-      
-      try {
-        console.log(`Uploading single file to Google Drive: ${file.originalname} (${file.size} bytes)`);
-        console.log(`File details: fieldname=${file.fieldname}, mimetype=${file.mimetype}`);
-        
-        // Check for supported file types
-        const fileName = file.originalname.toLowerCase();
-        const validExtensions = ['.zip', '.rar', '.7z', '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif'];
-        const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
-        
-        if (!hasValidExtension) {
-          console.error(`Invalid file type detected: ${fileName}`);
-          return res.status(400).json({ 
-            message: `Invalid file type. Supported formats are: ZIP, RAR, 7Z, PDF, and image files.`
-          });
-        }
-        
-        // Upload file to Google Drive
-        const driveFile = await uploadToDrive(
-          filePath,
-          file.originalname,
-          file.mimetype
-        );
-
-        if (driveFile) {
-          // File was successfully uploaded to Google Drive
-          const fileUrl = driveFile.webContentLink || driveFile.webViewLink;
-          
-          // Delete the local file since we now have it in Google Drive
-          await deleteLocalFile(filePath);
-          console.log(`Uploaded to Google Drive successfully: ${driveFile.id}`);
-          
-          return res.status(200).json({
-            success: true,
-            message: 'File uploaded to Google Drive successfully',
-            fileInfo: {
-              id: driveFile.id,
-              name: driveFile.name,
-              size: driveFile.size,
-              url: fileUrl
-            }
-          });
-        } else {
-          console.error('Drive file upload returned null');
-          return res.status(500).json({ 
-            message: 'Failed to upload to Google Drive. Please try again.' 
-          });
-        }
-      } catch (driveError) {
-        console.error('Error uploading to Google Drive:', driveError);
-        
-        // Try to delete the local file if it exists to clean up
-        try {
-          if (fs.existsSync(filePath)) {
-            await deleteLocalFile(filePath);
-          }
-        } catch (deleteError) {
-          console.error('Error cleaning up local file:', deleteError);
-        }
-        
+      } else {
+        console.error('Drive file upload returned null');
         return res.status(500).json({ 
-          message: 'Error uploading to Google Drive',
-          error: driveError.message
+          message: 'Failed to upload to Google Drive. Please try again.' 
         });
       }
-    } else {
-      console.error('Invalid upload format detected');
-      return res.status(400).json({ message: 'Invalid upload format. Please try again.' });
+    } catch (driveError) {
+      console.error('Error uploading to Google Drive:', driveError);
+      
+      // Try to delete the local file if it exists to clean up
+      try {
+        if (fs.existsSync(filePath)) {
+          await deleteLocalFile(filePath);
+        }
+      } catch (deleteError) {
+        console.error('Error cleaning up local file:', deleteError);
+      }
+      
+      // Provide more detailed error information
+      let errorDetail = 'Unknown server error';
+      
+      if (driveError.response) {
+        errorDetail = `API Error: ${driveError.response.status || 'unknown'} - ${JSON.stringify(driveError.response.data || {})}`;
+      } else if (driveError.request) {
+        errorDetail = 'No response received from Google Drive API';
+      } else if (driveError.message) {
+        errorDetail = driveError.message;
+      }
+      
+      return res.status(500).json({ 
+        message: 'Error uploading to Google Drive',
+        error: driveError.message || 'Unknown error',
+        detail: errorDetail
+      });
     }
   } catch (error) {
     console.error('Server error during Google Drive upload:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message || 'Unknown server error'
+    });
   }
 };
 

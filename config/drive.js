@@ -57,7 +57,26 @@ const initGoogleDriveAPI = () => {
       'GOOGLE_DRIVE_FOLDER_ID'
     ];
 
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    // Log environment variable availability for debugging
+    console.log('Checking Google Drive environment variables:');
+    const missingVars = [];
+    
+    requiredEnvVars.forEach(varName => {
+      if (!process.env[varName]) {
+        console.error(`Missing required env var: ${varName}`);
+        missingVars.push(varName);
+      } else {
+        // Don't log the actual private key value for security
+        if (varName === 'GOOGLE_DRIVE_PRIVATE_KEY') {
+          console.log(`${varName}: [Present, length: ${process.env[varName].length}]`);
+        } else if (varName === 'GOOGLE_DRIVE_PRIVATE_KEY_ID') {
+          console.log(`${varName}: [Present]`);
+        } else {
+          console.log(`${varName}: ${process.env[varName]}`);
+        }
+      }
+    });
+    
     if (missingVars.length > 0) {
       console.warn(`Missing Google Drive environment variables: ${missingVars.join(', ')}`);
       console.warn('Google Drive storage will not be available. Using local storage instead.');
@@ -80,15 +99,27 @@ const initGoogleDriveAPI = () => {
     };
 
     // Create auth client
+    console.log('Creating Google Drive auth client...');
     const auth = new google.auth.GoogleAuth({
       credentials,
       scopes: ['https://www.googleapis.com/auth/drive.file']
     });
 
     // Create and return the drive client
+    console.log('Google Drive API initialized successfully');
     return google.drive({ version: 'v3', auth });
   } catch (error) {
     console.error('Error initializing Google Drive API:', error);
+    
+    // Log more specific error details
+    if (error.message) {
+      console.error('Error message:', error.message);
+    }
+    
+    if (error.code) {
+      console.error('Error code:', error.code);
+    }
+    
     return null;
   }
 };
@@ -121,8 +152,55 @@ const uploadToDrive = async (filePath, fileName, mimeType, parentFolderId = null
       throw new Error(`File not found at path: ${filePath}`);
     }
 
+    // Check if we can read the file
+    try {
+      fs.accessSync(filePath, fs.constants.R_OK);
+    } catch (accessError) {
+      console.error(`Cannot read file at path: ${filePath}`, accessError);
+      throw new Error(`Cannot read file at path: ${filePath}: ${accessError.message}`);
+    }
+
+    // Get file stats for debugging
+    const stats = fs.statSync(filePath);
+    console.log(`File stats for ${filePath}: Size=${stats.size}, Mode=${stats.mode}, isFile=${stats.isFile()}`);
+
+    // Check if parent folder ID exists when provided
+    if (parentFolderId) {
+      try {
+        const folderCheck = await drive.files.get({
+          fileId: parentFolderId,
+          fields: 'id,name,mimeType'
+        });
+        
+        if (folderCheck.data.mimeType !== 'application/vnd.google-apps.folder') {
+          console.error(`Parent ID ${parentFolderId} is not a folder`);
+          throw new Error(`Parent ID ${parentFolderId} is not a folder`);
+        }
+        
+        console.log(`Parent folder confirmed: ${folderCheck.data.name} (${parentFolderId})`);
+      } catch (folderError) {
+        if (folderError.response && folderError.response.status === 404) {
+          console.error(`Parent folder not found: ${parentFolderId}`);
+          throw new Error(`Parent folder not found: ${parentFolderId}`);
+        }
+        console.error(`Error checking parent folder: ${folderError.message}`);
+        // Continue anyway, Google Drive will create it if needed
+      }
+    }
+
     // Create a readable stream from the file
-    const fileStream = fs.createReadStream(filePath);
+    let fileStream;
+    try {
+      fileStream = fs.createReadStream(filePath);
+      
+      // Add error handler for the stream
+      fileStream.on('error', (streamError) => {
+        console.error(`Error with file stream for ${filePath}:`, streamError);
+      });
+    } catch (streamError) {
+      console.error(`Error creating read stream for ${filePath}:`, streamError);
+      throw new Error(`Error creating read stream: ${streamError.message}`);
+    }
     
     // Set up the file metadata
     const fileMetadata = {
@@ -140,6 +218,8 @@ const uploadToDrive = async (filePath, fileName, mimeType, parentFolderId = null
     console.log(`Starting Google Drive upload for: ${fileName} (${filePath})`);
     if (parentFolderId) {
       console.log(`Uploading inside folder with ID: ${parentFolderId}`);
+    } else {
+      console.log(`Uploading to root folder with ID: ${process.env.GOOGLE_DRIVE_FOLDER_ID}`);
     }
     
     // Upload the file to Google Drive
@@ -152,19 +232,31 @@ const uploadToDrive = async (filePath, fileName, mimeType, parentFolderId = null
     console.log('File uploaded to Google Drive:', response.data);
     
     // Make the file publicly accessible for download
-    await drive.permissions.create({
-      fileId: response.data.id,
-      requestBody: {
-        role: 'reader',
-        type: 'anyone'
-      }
-    });
+    try {
+      await drive.permissions.create({
+        fileId: response.data.id,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone'
+        }
+      });
+    } catch (permissionError) {
+      console.error(`Error setting file permissions for ${response.data.id}:`, permissionError);
+      // Continue without permissions
+    }
     
     // Get updated file with download link
-    const file = await drive.files.get({
-      fileId: response.data.id,
-      fields: 'id,name,webContentLink,webViewLink,size'
-    });
+    let file;
+    try {
+      file = await drive.files.get({
+        fileId: response.data.id,
+        fields: 'id,name,webContentLink,webViewLink,size'
+      });
+    } catch (getError) {
+      console.error(`Error getting updated file info for ${response.data.id}:`, getError);
+      // Return the original response data if we can't get updated info
+      return response.data;
+    }
     
     return file.data;
   } catch (error) {
@@ -177,6 +269,21 @@ const uploadToDrive = async (filePath, fileName, mimeType, parentFolderId = null
     
     if (error.response) {
       console.error('Error response:', error.response.data);
+      
+      // Check for common Google Drive API errors
+      if (error.response.status === 403) {
+        console.error('Permission denied. Check your Google Drive API credentials and permissions.');
+      } else if (error.response.status === 404) {
+        console.error('Resource not found. The folder or file ID may be invalid.');
+      } else if (error.response.status === 400) {
+        console.error('Bad request. Check the file format and request parameters.');
+      } else if (error.response.status === 401) {
+        console.error('Unauthorized. The credentials may be expired or invalid.');
+      } else if (error.response.status === 429) {
+        console.error('Too many requests. You may have hit a rate limit.');
+      } else if (error.response.status === 500) {
+        console.error('Server error on Google\'s side. You may want to retry later.');
+      }
     }
     
     if (error.message && error.message.includes('invalid_grant')) {
