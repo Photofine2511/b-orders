@@ -52,7 +52,7 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: 'https://b-orders.onrender.com/api',
+  origin: 'https://f-orders.vercel.app',
 }));
 
 // Logging middleware in development
