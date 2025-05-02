@@ -18,38 +18,24 @@ const { upload } = require('../config/drive');
 // Import the new controller functions
 const { uploadLargeFileToDrive, checkUploadStatus } = require('../controllers/uploadController');
 
-// @route   POST /api/orders
+// POST routes
 router.post('/', protect, upload.any(), createOrder);
 
-// @route   GET /api/orders
+// Add direct Google Drive upload routes
+router.post('/upload-to-drive', protect, upload.any(), uploadToDriveOnly);
+router.post('/upload-large-file-to-drive', protect, upload.any(), uploadLargeFileToDrive);
+
+// GET routes - IMPORTANT: Place specific routes before parameterized routes
+router.get('/check-upload-status', protect, checkUploadStatus); // This must come before '/:id'
 router.get('/', protect, getMyOrders);
-
-// @route   GET /api/orders/all
 router.get('/all', protect, admin, getAllOrders);
-
-// @route   GET /api/orders/:id
-router.get('/:id', protect, getOrderById);
-
-// @route   PUT /api/orders/:id/status
-router.put('/:id/status', protect, admin, updateOrderStatus);
-
-// @route   GET /api/orders/:id/download
-router.get('/:id/download', protect, admin, downloadOrderFile);
-
-// @route   GET /api/orders/drive/:fileId/download
 router.get('/drive/:fileId/download', protect, downloadDriveFile);
 
-// @route   PUT /api/orders/:id/notes
+// Order detail routes with params - these must come after specific routes
+router.get('/:id', protect, getOrderById);
+router.get('/:id/download', protect, admin, downloadOrderFile);
+router.put('/:id/status', protect, admin, updateOrderStatus);
 router.put('/:id/notes', protect, admin, addOrderNotes);
-
-// @route   DELETE /api/orders/:id
 router.delete('/:id', protect, admin, deleteOrder);
-
-// Add direct Google Drive upload route for large files
-router.post('/upload-to-drive', protect, upload.any(), uploadToDriveOnly);
-
-// New upload routes for large files
-router.post('/upload-large-file-to-drive', protect, upload.any(), uploadLargeFileToDrive);
-router.get('/check-upload-status', protect, checkUploadStatus);
 
 module.exports = router; 

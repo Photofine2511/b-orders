@@ -188,6 +188,7 @@ const checkUploadStatus = async (req, res) => {
     
     if (!fileName) {
       return res.status(400).json({
+        success: false,
         message: 'File name is required to check upload status'
       });
     }
@@ -198,84 +199,106 @@ const checkUploadStatus = async (req, res) => {
     let foundInCache = false;
     let cacheResult = null;
     
-    for (const [uploadId, uploadInfo] of uploadCache.entries()) {
-      if (uploadInfo.fileName === fileName && 
-          (!albumName || uploadInfo.albumName === albumName)) {
-        foundInCache = true;
-        cacheResult = uploadInfo;
-        console.log(`Found upload in cache: ${uploadId}, Status: ${uploadInfo.status}`);
-        break;
-      }
-    }
-    
-    if (foundInCache) {
-      if (cacheResult.status === 'completed') {
-        return res.status(200).json({
-          success: true,
-          message: 'Upload completed successfully',
-          status: 'completed',
-          fileInfo: {
-            id: cacheResult.driveFileId,
-            name: cacheResult.fileName,
-            size: cacheResult.fileSize,
-            url: cacheResult.fileUrl
-          }
-        });
-      } else if (cacheResult.status === 'uploading' || cacheResult.status === 'processing') {
-        return res.status(200).json({
-          success: true,
-          message: 'Upload still in progress',
-          status: cacheResult.status
-        });
-      } else {
-        // Failed status
-        return res.status(404).json({
-          success: false,
-          message: 'Upload failed',
-          error: cacheResult.error || 'Unknown error during upload'
-        });
-      }
-    }
-    
-    // If not in cache, check if an order exists with this file name
-    // This might happen if the server restarted after a successful upload
-    console.log(`Checking database for file: ${fileName}`);
-    
-    const drive = getDriveClient();
-    if (!drive) {
-      return res.status(500).json({
-        message: 'Google Drive service unavailable'
-      });
-    }
-    
-    // Search Google Drive for the file by name
     try {
-      const response = await drive.files.list({
-        q: `name = '${fileName}' and trashed = false`,
-        fields: 'files(id, name, size, webContentLink, webViewLink)'
-      });
+      for (const [uploadId, uploadInfo] of uploadCache.entries()) {
+        if (uploadInfo.fileName === fileName && 
+            (!albumName || uploadInfo.albumName === albumName)) {
+          foundInCache = true;
+          cacheResult = uploadInfo;
+          console.log(`Found upload in cache: ${uploadId}, Status: ${uploadInfo.status}`);
+          break;
+        }
+      }
       
-      if (response.data.files && response.data.files.length > 0) {
-        const driveFile = response.data.files[0];
-        console.log(`Found file in Google Drive: ${driveFile.id}`);
+      if (foundInCache) {
+        if (cacheResult.status === 'completed') {
+          return res.status(200).json({
+            success: true,
+            message: 'Upload completed successfully',
+            status: 'completed',
+            fileInfo: {
+              id: cacheResult.driveFileId,
+              name: cacheResult.fileName,
+              size: cacheResult.fileSize,
+              url: cacheResult.fileUrl
+            }
+          });
+        } else if (cacheResult.status === 'uploading' || cacheResult.status === 'processing') {
+          return res.status(200).json({
+            success: true,
+            message: 'Upload still in progress',
+            status: cacheResult.status
+          });
+        } else {
+          // Failed status
+          return res.status(404).json({
+            success: false,
+            message: 'Upload failed',
+            error: cacheResult.error || 'Unknown error during upload'
+          });
+        }
+      }
+    } catch (cacheError) {
+      console.error('Error checking upload cache:', cacheError);
+      // Continue to check Google Drive directly
+    }
+    
+    // If not in cache, check if a file exists with this name in Google Drive
+    // This might happen if the server restarted after a successful upload
+    console.log(`Checking Google Drive directly for file: ${fileName}`);
+    
+    try {
+      const drive = getDriveClient();
+      if (!drive) {
+        return res.status(500).json({
+          success: false,
+          message: 'Google Drive service unavailable'
+        });
+      }
+      
+      // Search Google Drive for the file by name
+      try {
+        const response = await drive.files.list({
+          q: `name = '${fileName}' and trashed = false`,
+          fields: 'files(id, name, size, webContentLink, webViewLink)'
+        });
         
-        return res.status(200).json({
-          success: true,
-          message: 'File found in Google Drive',
-          status: 'completed',
-          fileInfo: {
-            id: driveFile.id,
-            name: driveFile.name,
-            size: driveFile.size,
-            url: driveFile.webContentLink || driveFile.webViewLink
-          }
+        if (response.data.files && response.data.files.length > 0) {
+          const driveFile = response.data.files[0];
+          console.log(`Found file in Google Drive: ${driveFile.id}`);
+          
+          return res.status(200).json({
+            success: true,
+            message: 'File found in Google Drive',
+            status: 'completed',
+            fileInfo: {
+              id: driveFile.id,
+              name: driveFile.name,
+              size: driveFile.size,
+              url: driveFile.webContentLink || driveFile.webViewLink
+            }
+          });
+        } else {
+          console.log(`No file found in Google Drive with name: ${fileName}`);
+        }
+      } catch (driveSearchError) {
+        console.error(`Error searching Google Drive: ${driveSearchError.message}`);
+        return res.status(500).json({
+          success: false,
+          message: 'Error searching Google Drive',
+          error: driveSearchError.message
         });
       }
     } catch (driveError) {
-      console.error(`Error searching Google Drive: ${driveError.message}`);
+      console.error('Error accessing Google Drive client:', driveError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error accessing Google Drive service',
+        error: driveError.message
+      });
     }
     
-    // If we get here, the file wasn't found
+    // If we get here, the file wasn't found anywhere
     return res.status(404).json({
       success: false,
       message: 'Upload not found or has failed',
@@ -284,6 +307,7 @@ const checkUploadStatus = async (req, res) => {
   } catch (error) {
     console.error('Error checking upload status:', error);
     res.status(500).json({
+      success: false,
       message: 'Server error while checking upload status',
       error: error.message || 'Unknown server error'
     });
