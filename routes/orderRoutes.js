@@ -19,7 +19,7 @@ const { upload } = require('../config/drive');
 const { uploadLargeFileToDrive, checkUploadStatus } = require('../controllers/uploadController');
 
 // @route   POST /api/orders
-router.post('/', protect, upload.single('file'), createOrder);
+router.post('/', protect, upload.any(), createOrder);
 
 // @route   GET /api/orders
 router.get('/', protect, getMyOrders);

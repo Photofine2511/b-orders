@@ -36,9 +36,17 @@ const createOrder = async (req, res) => {
     let finalDriveFileId = null;
     let driveFileLink = null;
 
+    console.log('Create order request:', {
+      hasFiles: req.files && req.files.length > 0,
+      hasDriveFileId: !!driveFileId,
+      albumName
+    });
+
     // Case 1: Using an existing Google Drive file ID
     if (driveFileId) {
       try {
+        console.log(`Using existing Drive file ID: ${driveFileId}`);
+        
         // Verify that the file exists in Google Drive and get its details
         const driveFile = await getFileFromDrive(driveFileId);
         
@@ -65,13 +73,14 @@ const createOrder = async (req, res) => {
       }
     }
     // Case 2: Upload a new file
-    else if (req.file) {
+    else if (req.files && req.files.length > 0) {
       // Get the file path and information
-      const filePath = req.file.path;
+      const file = req.files[0];
+      const filePath = file.path;
       const relativePath = path.basename(filePath);
       serverFilename = relativePath;
-      originalFilename = req.file.originalname;
-      fileSize = req.file.size;
+      originalFilename = file.originalname;
+      fileSize = file.size;
       
       // Always try to upload to Google Drive
       try {
@@ -80,8 +89,8 @@ const createOrder = async (req, res) => {
           // Upload file to Google Drive
           const driveFile = await uploadToDrive(
             filePath,
-            req.file.originalname,
-            req.file.mimetype
+            file.originalname,
+            file.mimetype
           );
 
           if (driveFile) {
