@@ -15,6 +15,9 @@ const {
 const { protect, admin } = require('../middleware/authMiddleware');
 const { upload } = require('../config/drive');
 
+// Import the new controller functions
+const { uploadLargeFileToDrive, checkUploadStatus } = require('../controllers/uploadController');
+
 // @route   POST /api/orders
 router.post('/', protect, upload.single('file'), createOrder);
 
@@ -44,5 +47,9 @@ router.delete('/:id', protect, admin, deleteOrder);
 
 // Add direct Google Drive upload route for large files
 router.post('/upload-to-drive', protect, upload.any(), uploadToDriveOnly);
+
+// New upload routes for large files
+router.post('/upload-large-file-to-drive', protect, upload.any(), uploadLargeFileToDrive);
+router.get('/check-upload-status', protect, checkUploadStatus);
 
 module.exports = router; 
